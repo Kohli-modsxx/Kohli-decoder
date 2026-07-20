@@ -3,7 +3,6 @@ import re
 import html
 import os
 from io import BytesIO
-from typing import Optional, Dict, Any
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -16,7 +15,7 @@ from telegram.ext import (
 )
 
 # ==================== CONFIGURATION ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Render pe token set karenge
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 # ==================== LOGGING ====================
 logging.basicConfig(
@@ -27,15 +26,13 @@ logger = logging.getLogger(__name__)
 
 # ==================== DECODER ENGINE ====================
 class RDXDecoder:
-    """Core decoding engine"""
-    
     @staticmethod
     def decode_css_content(content_str: str) -> str:
+        """Decode CSS content with Unicode escape sequences"""
         cleaned = content_str.strip().strip("'\"")
         matches = re.findall(r'\\+[0-9a-fA-F]+', cleaned)
         if not matches:
             return cleaned
-        
         result = []
         for match in matches:
             hex_part = re.sub(r'^\\+', '', match)
@@ -47,6 +44,7 @@ class RDXDecoder:
     
     @staticmethod
     def decrypt_script_block(script_text: str) -> str:
+        """Simulate script execution to extract decrypted content"""
         collected = []
         
         def fake_eval(code):
@@ -123,6 +121,8 @@ class RDXDecoder:
     
     @classmethod
     def decode_html(cls, html_content: str) -> str:
+        """Main decoding function"""
+        # 1) Extract s-eto rules from <style>
         rule_map = {}
         style_regex = re.compile(r'<style[^>]*>([\s\S]*?)<\/style>', re.IGNORECASE)
         style_block_to_remove = None
@@ -140,23 +140,28 @@ class RDXDecoder:
                     content_value = rule_match.group(2)
                     rule_map[element_id] = cls.decode_css_content(content_value)
         
+        # 2) Parse HTML using html5lib (works on Render)
         try:
             from bs4 import BeautifulSoup
-            soup = BeautifulSoup(html_content, 'html.parser')
+            soup = BeautifulSoup(html_content, 'html5lib')
         except ImportError:
+            # Fallback: use regex-based decoding
             soup = None
         
         if soup:
+            # 3) Replace <s-eto> elements with text nodes
             for s_eto in soup.find_all('s-eto'):
                 element_id = s_eto.get('id')
                 if element_id and element_id in rule_map:
                     s_eto.replace_with(rule_map[element_id])
             
+            # 4) Remove style containing s-eto
             if style_block_to_remove:
                 for style_tag in soup.find_all('style'):
                     if style_tag.string and 's-eto' in style_tag.string:
                         style_tag.decompose()
             
+            # 5) Handle script decryption
             for script_tag in soup.find_all('script'):
                 script_text = script_tag.string or ''
                 if (
@@ -173,9 +178,12 @@ class RDXDecoder:
                     if decrypted and decrypted.strip():
                         script_tag.string = '\n' + decrypted.strip() + '\n'
             
+            # 6) Rebuild HTML
             output = str(soup)
         else:
+            # Fallback: use regex-based decoding
             output = html_content
+            # Simple replacements
             for elem_id, content in rule_map.items():
                 output = re.sub(
                     rf'<s-eto\s+id=["\']?{elem_id}["\']?>\s*</s-eto>',
@@ -183,15 +191,18 @@ class RDXDecoder:
                     output
                 )
             
+            # Remove style blocks with s-eto
             if style_block_to_remove:
                 output = output.replace(style_block_to_remove, '')
         
+        # 7) Strip obfuscator comment banner
         banner_regex = re.compile(
             r'<!--\s*╔══════════════════════════════════════════════════════════╗[\s\S]*?╚══════════════════════════════════════════════════════════╝\s*-->',
             re.IGNORECASE
         )
         output = banner_regex.sub('', output)
         
+        # 8) Ensure DOCTYPE
         if not output.strip().startswith('<!DOCTYPE'):
             output = '<!DOCTYPE html>\n' + output
         
@@ -201,6 +212,7 @@ class RDXDecoder:
 # ==================== BOT HANDLERS ====================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command"""
     user = update.effective_user
     welcome_text = (
         f"🚀 <b>RDX DECODER PRO</b>\n\n"
@@ -230,6 +242,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /help command"""
     help_text = (
         "📖 <b>RDX Decoder - User Guide</b>\n\n"
         "<b>Supported Input:</b>\n"
@@ -256,14 +269,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle uploaded document files"""
     document = update.message.document
     
+    # Check file type
     if not document.file_name or not document.file_name.endswith(('.html', '.htm')):
         await update.message.reply_text(
             "❌ Please send an HTML file (.html or .htm extension)"
         )
         return
     
+    # Check file size (10MB limit)
     if document.file_size > 10 * 1024 * 1024:
         await update.message.reply_text(
             "❌ File too large! Maximum size is 10MB."
@@ -275,16 +291,20 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     try:
+        # Download file
         file = await document.get_file()
         file_content = await file.download_as_bytearray()
         html_content = file_content.decode('utf-8', errors='ignore')
         
+        # Decode
         decoded = RDXDecoder.decode_html(html_content)
         
+        # Create download file
         output_bytes = decoded.encode('utf-8')
         output_file = BytesIO(output_bytes)
         output_file.name = f"decoded_{document.file_name}"
         
+        # Send back decoded file
         await update.message.reply_document(
             document=output_file,
             filename=f"RDX_decoded_{document.file_name}",
@@ -301,8 +321,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text input (HTML code)"""
     text = update.message.text
     
+    # Check if it looks like HTML
     if not any(tag in text.lower() for tag in ['<html', '<body', '<head', '<script', '<div', '<style']):
         await update.message.reply_text(
             "ℹ️ This doesn't look like HTML code.\n\n"
@@ -315,9 +337,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     try:
+        # Decode
         decoded = RDXDecoder.decode_html(text)
         
+        # Check if decoded content is too long for message
         if len(decoded) > 4000:
+            # Send as file
             output_bytes = decoded.encode('utf-8')
             output_file = BytesIO(output_bytes)
             output_file.name = "decoded_output.html"
@@ -328,6 +353,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption="✅ Decoding complete! Output is large, sent as file."
             )
         else:
+            # Send as text
             await update.message.reply_text(
                 f"✅ <b>Decoded HTML</b>\n\n<pre>{html.escape(decoded)}</pre>",
                 parse_mode='HTML'
@@ -343,6 +369,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle inline keyboard callbacks"""
     query = update.callback_query
     await query.answer()
     
@@ -367,22 +394,48 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle errors"""
     logger.error(f"Update {update} caused error {context.error}")
+    
+    try:
+        if update and update.effective_message:
+            await update.effective_message.reply_text(
+                "⚠️ An unexpected error occurred. Please try again later."
+            )
+    except Exception:
+        pass
 
 
 # ==================== MAIN ====================
 
 def main():
     """Start the bot"""
+    # Create application
     application = Application.builder().token(BOT_TOKEN).build()
     
+    # Add handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    
+    # Document handler - for file uploads
+    application.add_handler(MessageHandler(
+        filters.Document.ALL,
+        handle_document
+    ))
+    
+    # Text handler - for pasted code
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        handle_text
+    ))
+    
+    # Callback query handler
     application.add_handler(CallbackQueryHandler(callback_query_handler))
+    
+    # Error handler
     application.add_error_handler(error_handler)
     
+    # Start the bot
     print("🚀 RDX Decoder Bot is running on Render...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
