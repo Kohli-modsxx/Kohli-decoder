@@ -17,6 +17,11 @@ from telegram.ext import (
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
+if not BOT_TOKEN:
+    print("❌ BOT_TOKEN environment variable not set!")
+    print("Please set BOT_TOKEN in Render Environment Variables")
+    exit(1)
+
 # ==================== LOGGING ====================
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -140,12 +145,11 @@ class RDXDecoder:
                     content_value = rule_match.group(2)
                     rule_map[element_id] = cls.decode_css_content(content_value)
         
-        # 2) Parse HTML using html5lib (works on Render)
+        # 2) Parse HTML using html5lib
         try:
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(html_content, 'html5lib')
         except ImportError:
-            # Fallback: use regex-based decoding
             soup = None
         
         if soup:
@@ -183,7 +187,6 @@ class RDXDecoder:
         else:
             # Fallback: use regex-based decoding
             output = html_content
-            # Simple replacements
             for elem_id, content in rule_map.items():
                 output = re.sub(
                     rf'<s-eto\s+id=["\']?{elem_id}["\']?>\s*</s-eto>',
@@ -191,7 +194,6 @@ class RDXDecoder:
                     output
                 )
             
-            # Remove style blocks with s-eto
             if style_block_to_remove:
                 output = output.replace(style_block_to_remove, '')
         
@@ -272,39 +274,27 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle uploaded document files"""
     document = update.message.document
     
-    # Check file type
     if not document.file_name or not document.file_name.endswith(('.html', '.htm')):
-        await update.message.reply_text(
-            "❌ Please send an HTML file (.html or .htm extension)"
-        )
+        await update.message.reply_text("❌ Please send an HTML file (.html or .htm extension)")
         return
     
-    # Check file size (10MB limit)
     if document.file_size > 10 * 1024 * 1024:
-        await update.message.reply_text(
-            "❌ File too large! Maximum size is 10MB."
-        )
+        await update.message.reply_text("❌ File too large! Maximum size is 10MB.")
         return
     
-    processing_msg = await update.message.reply_text(
-        "🔄 Processing your file... Please wait."
-    )
+    processing_msg = await update.message.reply_text("🔄 Processing your file... Please wait.")
     
     try:
-        # Download file
         file = await document.get_file()
         file_content = await file.download_as_bytearray()
         html_content = file_content.decode('utf-8', errors='ignore')
         
-        # Decode
         decoded = RDXDecoder.decode_html(html_content)
         
-        # Create download file
         output_bytes = decoded.encode('utf-8')
         output_file = BytesIO(output_bytes)
         output_file.name = f"decoded_{document.file_name}"
         
-        # Send back decoded file
         await update.message.reply_document(
             document=output_file,
             filename=f"RDX_decoded_{document.file_name}",
@@ -315,34 +305,25 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logger.error(f"Error processing file: {e}")
-        await processing_msg.edit_text(
-            f"❌ Error processing file: {str(e)[:100]}\n\nPlease try again or contact support."
-        )
+        await processing_msg.edit_text(f"❌ Error processing file: {str(e)[:100]}")
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text input (HTML code)"""
     text = update.message.text
     
-    # Check if it looks like HTML
     if not any(tag in text.lower() for tag in ['<html', '<body', '<head', '<script', '<div', '<style']):
         await update.message.reply_text(
-            "ℹ️ This doesn't look like HTML code.\n\n"
-            "Send me an HTML file or paste valid HTML code to decode."
+            "ℹ️ This doesn't look like HTML code.\n\nSend me an HTML file or paste valid HTML code to decode."
         )
         return
     
-    processing_msg = await update.message.reply_text(
-        "🔄 Decoding HTML code... Please wait."
-    )
+    processing_msg = await update.message.reply_text("🔄 Decoding HTML code... Please wait.")
     
     try:
-        # Decode
         decoded = RDXDecoder.decode_html(text)
         
-        # Check if decoded content is too long for message
         if len(decoded) > 4000:
-            # Send as file
             output_bytes = decoded.encode('utf-8')
             output_file = BytesIO(output_bytes)
             output_file.name = "decoded_output.html"
@@ -353,7 +334,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption="✅ Decoding complete! Output is large, sent as file."
             )
         else:
-            # Send as text
             await update.message.reply_text(
                 f"✅ <b>Decoded HTML</b>\n\n<pre>{html.escape(decoded)}</pre>",
                 parse_mode='HTML'
@@ -363,9 +343,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logger.error(f"Error decoding text: {e}")
-        await processing_msg.edit_text(
-            f"❌ Error decoding: {str(e)[:100]}\n\nPlease check the input format."
-        )
+        await processing_msg.edit_text(f"❌ Error decoding: {str(e)[:100]}")
 
 
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -375,68 +353,40 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     
     if query.data == "send_file":
         await query.edit_message_text(
-            "📤 <b>Send me your file</b>\n\n"
-            "Click the attachment icon (📎) and select your .html file.\n\n"
-            "I'll decode it and send back the clean version.",
+            "📤 <b>Send me your file</b>\n\nClick the attachment icon (📎) and select your .html file.",
             parse_mode='HTML'
         )
-    
     elif query.data == "help":
-        help_text = (
-            "📖 <b>Quick Help</b>\n\n"
-            "1️⃣ <b>Upload file:</b> Send as document\n"
-            "2️⃣ <b>Paste code:</b> Send as text message\n"
-            "3️⃣ <b>Drag & drop:</b> Works in Telegram Desktop\n\n"
-            "I'll automatically detect and decode obfuscated code.\n\n"
-            "⚡ <b>Pro tip:</b> Send large files as documents for best results."
+        await query.edit_message_text(
+            "📖 <b>Quick Help</b>\n\n1️⃣ Upload file: Send as document\n2️⃣ Paste code: Send as text message",
+            parse_mode='HTML'
         )
-        await query.edit_message_text(help_text, parse_mode='HTML')
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle errors"""
     logger.error(f"Update {update} caused error {context.error}")
-    
-    try:
-        if update and update.effective_message:
-            await update.effective_message.reply_text(
-                "⚠️ An unexpected error occurred. Please try again later."
-            )
-    except Exception:
-        pass
 
 
 # ==================== MAIN ====================
 
 def main():
     """Start the bot"""
+    print("🚀 RDX Decoder Bot is starting...")
+    print(f"BOT_TOKEN: {'✅ Set' if BOT_TOKEN else '❌ Not Set'}")
+    
     # Create application
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Add handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
-    
-    # Document handler - for file uploads
-    application.add_handler(MessageHandler(
-        filters.Document.ALL,
-        handle_document
-    ))
-    
-    # Text handler - for pasted code
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        handle_text
-    ))
-    
-    # Callback query handler
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(CallbackQueryHandler(callback_query_handler))
-    
-    # Error handler
     application.add_error_handler(error_handler)
     
-    # Start the bot
-    print("🚀 RDX Decoder Bot is running on Render...")
+    print("✅ Bot is ready! Starting polling...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
